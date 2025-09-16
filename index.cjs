@@ -1,64 +1,110 @@
+// index.cjs
+
 const express = require("express");
-const { default: makeWASocket, useMultiFileAuthState } = require("@whiskeysockets/baileys");
-const pino = require("pino");
-const fs = require("fs-extra");
+const cookieParser = require("cookie-parser");
 const cors = require("cors");
+const fs = require("fs-extra");
+const makeWASocket = require("@whiskeysockets/baileys").default;
+const { useMultiFileAuthState, fetchLatestBaileysVersion } = require("@whiskeysockets/baileys");
+const QRCode = require("qrcode");
 
 const app = express();
-app.use(express.json());
-app.use(cors());
-
-const ADMIN_TOKEN = "CYPHER TOKENS"; // secure this better if you can
 const PORT = process.env.PORT || 3000;
 
-let sessions = {}; // keep track of running sessions
+// Middlewares
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(cookieParser());
+app.use(cors());
+
+// Sessions directory
+const SESSIONS_DIR = "./sessions";
+if (!fs.existsSync(SESSIONS_DIR)) {
+  fs.mkdirSync(SESSIONS_DIR);
+}
+
+// Store active sessions in memory
+const sessions = {};
 
 // Start a new session
-app.post("/api/start-session", async (req, res) => {
-  const { token } = req.query;
-  if (token !== ADMIN_TOKEN) return res.status(403).json({ message: "Invalid token" });
+app.post("/start-session", async (req, res) => {
+  const { sessionId } = req.body;
 
-  const { id } = req.body;
-  if (!id) return res.status(400).json({ message: "Missing session ID" });
+  if (!sessionId) {
+    return res.status(400).json({ error: "sessionId is required" });
+  }
+
+  if (sessions[sessionId]) {
+    return res.status(400).json({ error: "Session already exists" });
+  }
+
+  const sessionPath = `${SESSIONS_DIR}/${sessionId}`;
+  const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
+  const { version } = await fetchLatestBaileysVersion();
+
+  const sock = makeWASocket({
+    version,
+    printQRInTerminal: false,
+    auth: state,
+  });
+
+  sock.ev.on("creds.update", saveCreds);
+
+  sessions[sessionId] = sock;
+
+  res.json({ message: `Session ${sessionId} started` });
+});
+
+// Get QR code
+app.get("/qr/:sessionId", async (req, res) => {
+  const { sessionId } = req.params;
+  const sock = sessions[sessionId];
+
+  if (!sock) {
+    return res.status(400).json({ error: "Session not found. Start it first." });
+  }
+
+  sock.ev.on("connection.update", async (update) => {
+    const { qr } = update;
+    if (qr) {
+      const qrImage = await QRCode.toDataURL(qr);
+      res.json({ qr: qrImage });
+    }
+  });
+});
+
+// Request pair code
+app.post("/pair-code", async (req, res) => {
+  const { sessionId, phoneNumber } = req.body;
+
+  if (!sessionId || !phoneNumber) {
+    return res.status(400).json({ error: "sessionId and phoneNumber are required" });
+  }
+
+  const sock = sessions[sessionId];
+  if (!sock) {
+    return res.status(400).json({ error: "Session not found. Start it first." });
+  }
 
   try {
-    const { state, saveCreds } = await useMultiFileAuthState(`./auth/${id}`);
-    const sock = makeWASocket({
-      auth: state,
-      printQRInTerminal: false,
-      logger: pino({ level: "silent" })
-    });
-
-    sock.ev.on("creds.update", saveCreds);
-
-    sessions[id] = sock;
-    return res.json({ message: `Session ${id} started.` });
+    const code = await sock.requestPairingCode(phoneNumber);
+    res.json({ pairCode: code });
   } catch (err) {
-    console.error("Start session error:", err);
-    return res.status(500).json({ message: "Failed to start session", error: err.toString() });
+    res.status(500).json({ error: err.message });
   }
 });
 
-// Generate a pair code
-app.post("/api/pair-code", async (req, res) => {
-  const { token } = req.query;
-  if (token !== ADMIN_TOKEN) return res.status(403).json({ message: "Invalid token" });
-
-  const { id, number } = req.body;
-  if (!id || !number) return res.status(400).json({ message: "Missing session ID or number" });
-
-  const sock = sessions[id];
-  if (!sock) return res.status(400).json({ message: "Session not found, start it first." });
-
-  try {
-    // ✅ Baileys function to request a pairing code
-    const code = await sock.requestPairingCode(number);
-
-    return res.json({ message: "Pair code generated", code });
-  } catch (err) {
-    console.error("Pair code error:", err);
-    return res.status(500).json({ message: "Failed to generate pair code", error: err.toString() });
-  }
+// Home route
+app.get("/", (req, res) => {
+  res.send("🚀 Cypher Session Generator is live!");
 });
 
-app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
+// Health check route
+app.get("/health", (req, res) => {
+  res.json({ status: "ok", uptime: process.uptime() });
+});
+
+// Start server
+app.listen(PORT, () => {
+  console.log(`✅ Server running on port ${PORT}`);
+});
