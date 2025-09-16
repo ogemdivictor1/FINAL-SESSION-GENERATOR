@@ -1,40 +1,127 @@
-import makeWASocket, {
-  useMultiFileAuthState,
-  makeCacheableSignalKeyStore,
-  fetchLatestBaileysVersion,
-} from "@whiskeysockets/baileys";
-import MAIN_LOGGER from "@whiskeysockets/baileys/lib/Utils/logger.js";
 import express from "express";
-import qrcode from "qrcode";
-import fs from "fs-extra";
-import path from "path";
-import cors from "cors";
+import { makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion } from "@whiskeysockets/baileys";
+import qrcode from "qrcode"; // for generating QR as image
+import qrcodeTerminal from "qrcode-terminal"; // for terminal QR
 
 const app = express();
-const port = process.env.PORT || 3000;
-const logger = MAIN_LOGGER.child({});
-logger.level = "silent";
+const PORT = process.env.PORT || 3000;
 
-// folders
-const sessionFolder = path.join(process.cwd(), "sessions");
-fs.ensureDirSync(sessionFolder);
+// ✅ Your Admin Token
+const ADMIN_TOKEN = "CYPHER DEALS";
 
-const sessions = {};
+// Store last QR
+let latestQR = null;
 
-async function startSock(id) {
-  const authDir = path.join(sessionFolder, id);
-  const { state, saveCreds } = await useMultiFileAuthState(authDir);
-
+// Start WhatsApp bot
+async function startBot() {
+  const { state, saveCreds } = await useMultiFileAuthState("auth_info");
   const { version } = await fetchLatestBaileysVersion();
 
   const sock = makeWASocket({
+    auth: state,
     version,
-    printQRInTerminal: false,
-    auth: {
-      creds: state.creds,
-      keys: makeCacheableSignalKeyStore(state.keys, logger),
-    },
-    logger,
+    printQRInTerminal: true, // show QR in Render logs/console
+  });
+
+  sock.ev.on("creds.update", saveCreds);
+
+  // Capture QR when it is generated
+  sock.ev.on("connection.update", async (update) => {
+    const { qr, connection } = update;
+
+    if (qr) {
+      latestQR = await qrcode.toDataURL(qr);
+      qrcodeTerminal.generate(qr, { small: true });
+      console.log("📱 Scan this QR with your WhatsApp.");
+    }
+
+    if (connection === "open") {
+      console.log("✅ WhatsApp bot connected successfully!");
+    }
+
+    if (connection === "close") {
+      console.log("❌ Connection closed. Reconnecting...");
+      startBot();
+    }
+  });
+
+  return sock;
+}
+
+startBot();
+
+// --- Web API ---
+app.get("/", (req, res) => {
+  res.send(`
+    <html>
+      <head>
+        <title>Cypher Pairs</title>
+        <style>
+          body {
+            font-family: Arial, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e, #16213e);
+            color: #fff;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+          }
+          .container {
+            text-align: center;
+            background: #0f3460;
+            padding: 40px;
+            border-radius: 20px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.3);
+          }
+          h1 {
+            margin-bottom: 20px;
+            font-size: 28px;
+          }
+          img {
+            margin-top: 20px;
+            border: 5px solid #e94560;
+            border-radius: 15px;
+            max-width: 100%;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <h1>🤖 Cypher Pairs</h1>
+          ${
+            latestQR
+              ? `<img src="${latestQR}" alt="Scan QR to Pair"/>`
+              : "<p>⚡ Waiting for QR to be generated... Check logs if nothing shows.</p>"
+          }
+        </div>
+      </body>
+    </html>
+  `);
+});
+
+// Secure admin QR endpoint
+app.get("/qr", (req, res) => {
+  const token = req.query.token;
+  if (token !== ADMIN_TOKEN) {
+    return res.status(403).send("❌ Unauthorized: Invalid Admin Token.");
+  }
+
+  if (!latestQR) {
+    return res.send("⚡ No QR generated yet. Wait and refresh.");
+  }
+
+  res.send(`
+    <html>
+      <body style="text-align:center; font-family:sans-serif;">
+        <h2>Admin QR Code</h2>
+        <img src="${latestQR}" alt="QR Code"/>
+      </body>
+    </html>
+  `);
+});
+
+app.listen(PORT, () => console.log(`🚀 Server running on http://localhost:${PORT}`));    logger,
     browser: ["Cypher Pairs", "Safari", "3.0"],
     markOnlineOnConnect: true,
     generateHighQualityLinkPreview: true,
