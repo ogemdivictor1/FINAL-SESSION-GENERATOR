@@ -1,18 +1,16 @@
 {
   "name": "cypher-pairs",
   "version": "1.0.0",
-  "description": "Cypher Pairs WhatsApp session generator",
+  "description": "Cypher Pairs WhatsApp Session Generator",
   "main": "index.js",
   "type": "module",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "^6.7.8",
-    "qrcode-terminal": "^0.12.0",
-    "qrcode": "^1.5.3",
+    "@whiskeysockets/baileys": "^6.7.5",
     "express": "^4.18.2",
-    "cors": "^2.8.5",
-    "fs-extra": "^11.2.0"
+    "qrcode": "^1.5.3",
+    "qrcode-terminal": "^0.12.0"
   }
 }
