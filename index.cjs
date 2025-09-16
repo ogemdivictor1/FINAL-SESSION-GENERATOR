@@ -2,109 +2,115 @@
 
 const express = require("express");
 const cookieParser = require("cookie-parser");
-const cors = require("cors");
 const fs = require("fs-extra");
-const makeWASocket = require("@whiskeysockets/baileys").default;
-const { useMultiFileAuthState, fetchLatestBaileysVersion } = require("@whiskeysockets/baileys");
-const QRCode = require("qrcode");
+const path = require("path");
+const qrcode = require("qrcode");
+const {
+  default: makeWASocket,
+  useMultiFileAuthState,
+  fetchLatestBaileysVersion,
+} = require("@whiskeysockets/baileys");
 
 const app = express();
-const PORT = process.env.PORT || 3000;
-
-// Middlewares
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
-app.use(cors());
 
-// Sessions directory
-const SESSIONS_DIR = "./sessions";
-if (!fs.existsSync(SESSIONS_DIR)) {
-  fs.mkdirSync(SESSIONS_DIR);
-}
+const SESSIONS_DIR = path.join(__dirname, "sessions");
+fs.ensureDirSync(SESSIONS_DIR);
 
-// Store active sessions in memory
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN || "CYPHER TOKENS"; // set in Render for security
 const sessions = {};
 
-// Start a new session
-app.post("/start-session", async (req, res) => {
-  const { sessionId } = req.body;
-
-  if (!sessionId) {
-    return res.status(400).json({ error: "sessionId is required" });
-  }
-
-  if (sessions[sessionId]) {
-    return res.status(400).json({ error: "Session already exists" });
-  }
-
-  const sessionPath = `${SESSIONS_DIR}/${sessionId}`;
-  const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
-  const { version } = await fetchLatestBaileysVersion();
-
-  const sock = makeWASocket({
-    version,
-    printQRInTerminal: false,
-    auth: state,
-  });
-
-  sock.ev.on("creds.update", saveCreds);
-
-  sessions[sessionId] = sock;
-
-  res.json({ message: `Session ${sessionId} started` });
-});
-
-// Get QR code
-app.get("/qr/:sessionId", async (req, res) => {
-  const { sessionId } = req.params;
-  const sock = sessions[sessionId];
-
-  if (!sock) {
-    return res.status(400).json({ error: "Session not found. Start it first." });
-  }
-
-  sock.ev.on("connection.update", async (update) => {
-    const { qr } = update;
-    if (qr) {
-      const qrImage = await QRCode.toDataURL(qr);
-      res.json({ qr: qrImage });
-    }
-  });
-});
-
-// Request pair code
-app.post("/pair-code", async (req, res) => {
-  const { sessionId, phoneNumber } = req.body;
-
-  if (!sessionId || !phoneNumber) {
-    return res.status(400).json({ error: "sessionId and phoneNumber are required" });
-  }
-
-  const sock = sessions[sessionId];
-  if (!sock) {
-    return res.status(400).json({ error: "Session not found. Start it first." });
-  }
-
-  try {
-    const code = await sock.requestPairingCode(phoneNumber);
-    res.json({ pairCode: code });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Home route
+// ✅ Health + root routes (important for Render)
 app.get("/", (req, res) => {
   res.send("🚀 Cypher Session Generator is live!");
 });
 
-// Health check route
 app.get("/health", (req, res) => {
-  res.json({ status: "ok", uptime: process.uptime() });
+  res.json({ status: "ok" });
 });
 
-// Start server
-app.listen(PORT, () => {
-  console.log(`✅ Server running on port ${PORT}`);
+// ✅ Start a WhatsApp session
+app.post("/api/start-session", async (req, res) => {
+  const token = req.query.token;
+  if (token !== ADMIN_TOKEN)
+    return res.status(403).json({ error: "Unauthorized" });
+
+  const { id } = req.body;
+  if (!id) return res.status(400).json({ error: "Session ID required" });
+
+  if (sessions[id]) {
+    return res.json({ message: `Session '${id}' already running` });
+  }
+
+  try {
+    const sessionPath = path.join(SESSIONS_DIR, id);
+    const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
+    const { version } = await fetchLatestBaileysVersion();
+
+    const sock = makeWASocket({
+      version,
+      auth: state,
+      printQRInTerminal: true,
+    });
+
+    sock.ev.on("creds.update", saveCreds);
+
+    sock.ev.on("connection.update", (update) => {
+      const { connection, lastDisconnect, qr } = update;
+      if (connection === "open") {
+        console.log(`✅ Session '${id}' connected`);
+      } else if (connection === "close") {
+        console.log(`❌ Session '${id}' closed`, lastDisconnect?.error);
+        delete sessions[id];
+      }
+      if (qr) {
+        sessions[id].qr = qr;
+      }
+    });
+
+    sessions[id] = { sock, qr: null };
+    res.json({ message: `Session '${id}' started` });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to start session" });
+  }
 });
+
+// ✅ Get QR code
+app.get("/qr/:id", async (req, res) => {
+  const id = req.params.id;
+  if (!sessions[id]) return res.status(404).send("Session not found");
+  if (!sessions[id].qr) return res.status(400).send("QR not generated yet");
+
+  const qrImage = await qrcode.toDataURL(sessions[id].qr);
+  res.send(`<img src="${qrImage}" alt="Scan QR to connect WhatsApp"/>`);
+});
+
+// ✅ Get Pair Code (for phone number linking)
+app.post("/api/pair-code", async (req, res) => {
+  const token = req.query.token;
+  if (token !== ADMIN_TOKEN)
+    return res.status(403).json({ error: "Unauthorized" });
+
+  const { id, number } = req.body;
+  if (!id || !number)
+    return res.status(400).json({ error: "Session ID and number required" });
+
+  try {
+    const session = sessions[id];
+    if (!session) return res.status(404).json({ error: "Session not running" });
+
+    const code = await session.sock.requestPairingCode(number);
+    res.json({ message: `Pair code for ${number}: ${code}` });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to generate pair code" });
+  }
+});
+
+// ✅ Serve frontend (index.html in public folder)
+app.use(express.static(path.join(__dirname, "public")));
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
