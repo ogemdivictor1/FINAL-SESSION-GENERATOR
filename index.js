@@ -122,7 +122,11 @@ app.get("/qr", (req, res) => {
 });
 
 app.listen(PORT, () => console.log(`🚀 Server running on http://localhost:${PORT}`));    logger,
-    browser: ["Cypher Pairs", "Safari", "3.0"],
+    const sock = makeWASocket({
+  auth: state,
+  printQRInTerminal: true,
+  browser: ["Cypher Pairs", "Safari", "3.0"], 
+});
     markOnlineOnConnect: true,
     generateHighQualityLinkPreview: true,
   });
