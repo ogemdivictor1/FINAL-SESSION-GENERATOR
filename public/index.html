@@ -2,39 +2,160 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Cypher Pairs</title>
+  <title>CYPHER PAIRS - WhatsApp Session Generator</title>
   <style>
     body {
       font-family: Arial, sans-serif;
-      background: #0d1117;
-      color: #c9d1d9;
+      background: linear-gradient(135deg, #1e293b, #0f172a);
+      color: #f8fafc;
       text-align: center;
-      padding: 40px;
+      margin: 0;
+      padding: 0;
     }
-    h1 {
-      color: #58a6ff;
+
+    header {
+      padding: 30px 20px;
+      background: #111827;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.4);
     }
-    .session {
-      background: #161b22;
-      border: 1px solid #30363d;
+
+    header h1 {
+      margin: 0;
+      font-size: 2rem;
+      color: #38bdf8;
+    }
+
+    main {
+      padding: 40px 20px;
+    }
+
+    .card {
+      background: #1e293b;
       border-radius: 12px;
       padding: 20px;
-      margin: 15px auto;
-      width: 300px;
-      box-shadow: 0 4px 10px rgba(0,0,0,0.4);
+      max-width: 500px;
+      margin: 0 auto 20px;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.4);
     }
-    button {
-      background: #238636;
-      border: none;
-      padding: 10px 20px;
+
+    h2 {
+      color: #fbbf24;
+    }
+
+    input, button {
+      padding: 12px;
+      font-size: 1rem;
       border-radius: 8px;
-      color: white;
-      font-size: 14px;
-      cursor: pointer;
-      margin-top: 10px;
+      border: none;
+      outline: none;
+      margin: 8px 0;
     }
+
+    input {
+      width: 90%;
+      text-align: center;
+    }
+
+    button {
+      background: #38bdf8;
+      color: #0f172a;
+      cursor: pointer;
+      font-weight: bold;
+      transition: background 0.3s;
+    }
+
     button:hover {
-      background: #2ea043;
+      background: #0ea5e9;
+    }
+
+    .status {
+      margin-top: 15px;
+      padding: 10px;
+      background: #0f172a;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      color: #94a3b8;
+    }
+
+    footer {
+      margin-top: 30px;
+      padding: 15px;
+      font-size: 0.8rem;
+      background: #111827;
+      color: #64748b;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>⚡ CYPHER PAIRS</h1>
+    <p>Generate WhatsApp Sessions with QR or Pair Code</p>
+  </header>
+
+  <main>
+    <div class="card">
+      <h2>Start a Session</h2>
+      <input type="text" id="sessionId" placeholder="Enter a session ID">
+      <br>
+      <button onclick="startSession()">Start Session</button>
+      <div class="status" id="statusBox">No session started yet.</div>
+    </div>
+
+    <div class="card">
+      <h2>Get QR Code</h2>
+      <button onclick="showQR()">Show QR</button>
+    </div>
+
+    <div class="card">
+      <h2>Request Pair Code</h2>
+      <input type="text" id="phoneNumber" placeholder="Phone number (with country code)">
+      <br>
+      <button onclick="getPairCode()">Get Pair Code</button>
+      <div class="status" id="pairCodeBox">No code requested yet.</div>
+    </div>
+  </main>
+
+  <footer>
+    CYPHER PAIRS © 2025 — Powered by Baileys
+  </footer>
+
+  <script>
+    const API = location.origin + "/api";
+    const ADMIN_TOKEN = "CHANGE_THIS_NOW"; // replace with your Render ADMIN_TOKEN
+
+    async function startSession() {
+      const id = document.getElementById("sessionId").value.trim();
+      if (!id) return alert("Enter a session ID!");
+      const res = await fetch(API + "/start-session?token=" + ADMIN_TOKEN, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id })
+      });
+      const data = await res.json();
+      document.getElementById("statusBox").innerText = data.message || JSON.stringify(data);
+    }
+
+    function showQR() {
+      const id = document.getElementById("sessionId").value.trim();
+      if (!id) return alert("Enter a session ID first!");
+      window.open("/qr/" + id, "_blank");
+    }
+
+    async function getPairCode() {
+      const id = document.getElementById("sessionId").value.trim();
+      const number = document.getElementById("phoneNumber").value.trim();
+      if (!id || !number) return alert("Enter both session ID and phone number!");
+      const res = await fetch(API + "/pair-code?token=" + ADMIN_TOKEN, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, number })
+      });
+      const data = await res.json();
+      document.getElementById("pairCodeBox").innerText = data.message || JSON.stringify(data);
+    }
+  </script>
+</body>
+</html>      background: #2ea043;
     }
     .status {
       margin-top: 8px;
