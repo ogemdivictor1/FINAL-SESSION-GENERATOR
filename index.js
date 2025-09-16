@@ -1,40 +1,128 @@
-// index.js
-// CYPHER PAIRS - supports QR pairing and Pair Codes for any phone (owner must type/scan code)
-// Simple English comments throughout.
-
+import makeWASocket, {
+  useMultiFileAuthState,
+  makeCacheableSignalKeyStore,
+  fetchLatestBaileysVersion,
+} from "@whiskeysockets/baileys";
+import MAIN_LOGGER from "@whiskeysockets/baileys/lib/Utils/logger.js";
 import express from "express";
-import cors from "cors";
+import qrcode from "qrcode";
 import fs from "fs-extra";
 import path from "path";
-import qrcode from "qrcode";
-import { makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion } from "@whiskeysockets/baileys";
+import cors from "cors";
 
 const app = express();
-app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+const port = process.env.PORT || 3000;
+const logger = MAIN_LOGGER.child({});
+logger.level = "silent";
 
-// SECURITY: set ADMIN_TOKEN in environment to protect sensitive endpoints.
-// Example: export ADMIN_TOKEN="my-secret-token"
-const ADMIN_TOKEN = process.env.ADMIN_TOKEN || "CHANGE_THIS_NOW";
+// folders
+const sessionFolder = path.join(process.cwd(), "sessions");
+fs.ensureDirSync(sessionFolder);
 
-// folder where sessions are stored (one folder per id)
-const SESSIONS_DIR = path.join(process.cwd(), "sessions");
-fs.ensureDirSync(SESSIONS_DIR);
+const sessions = {};
 
-// map to keep sockets in memory while server runs
-const sockets = new Map();
+async function startSock(id) {
+  const authDir = path.join(sessionFolder, id);
+  const { state, saveCreds } = await useMultiFileAuthState(authDir);
 
-/* Helper - check admin token from query or header */
-function checkAdmin(req) {
-  const token = req.query.token || req.headers["x-admin-token"];
-  return token && token === ADMIN_TOKEN;
+  const { version } = await fetchLatestBaileysVersion();
+
+  const sock = makeWASocket({
+    version,
+    printQRInTerminal: false,
+    auth: {
+      creds: state.creds,
+      keys: makeCacheableSignalKeyStore(state.keys, logger),
+    },
+    logger,
+    browser: ["Cypher Pairs", "Safari", "3.0"],
+    markOnlineOnConnect: true,
+    generateHighQualityLinkPreview: true,
+  });
+
+  // save creds when updated
+  sock.ev.on("creds.update", saveCreds);
+
+  // handle QR and connection
+  sock.ev.on("connection.update", async (update) => {
+    const { connection, qr } = update;
+
+    if (qr) {
+      const qrFile = path.join(authDir, "qr.txt");
+      await fs.writeFile(qrFile, qr);
+      console.log(`[${id}] QR code generated`);
+    }
+
+    // connection status handling
+    if (connection === "open") {
+      try {
+        await fs.remove(path.join(authDir, "qr.txt"));
+      } catch (e) {}
+      console.log(`✅ [${id}] Session connected successfully!`);
+
+      // write connected.json
+      await fs.writeJson(path.join(authDir, "connected.json"), {
+        connected: true,
+        time: Date.now(),
+      });
+    }
+
+    if (connection === "connecting") {
+      console.log(`⏳ [${id}] Session is connecting...`);
+    }
+
+    if (connection === "close") {
+      console.log(`❌ [${id}] Session closed`);
+    }
+  });
+
+  sessions[id] = sock;
 }
 
-/* Helper - send 401 if not admin */
-function requireAdmin(req, res) {
-  if (!checkAdmin(req)) {
-    res.status(401).json({ ok: false, message: "Unauthorized. Provide ?token= or X-ADMIN-TOKEN header." });
+// API routes
+app.use(cors());
+app.use(express.json());
+app.use(express.static("public"));
+
+// generate new session
+app.get("/pair/:id", async (req, res) => {
+  const { id } = req.params;
+
+  if (!sessions[id]) {
+    await startSock(id);
+  }
+
+  // wait a bit for QR to generate
+  setTimeout(async () => {
+    const qrPath = path.join(sessionFolder, id, "qr.txt");
+    if (fs.existsSync(qrPath)) {
+      const qr = await fs.readFile(qrPath, "utf8");
+      const qrImage = await qrcode.toDataURL(qr);
+      res.send(`<img src="${qrImage}" alt="QR Code"/>`);
+    } else {
+      res.send("QR not available, maybe already connected.");
+    }
+  }, 2000);
+});
+
+// download session zip
+app.get("/session/:id/download", async (req, res) => {
+  const { id } = req.params;
+  const zipPath = path.join(sessionFolder, `${id}.zip`);
+
+  // create zip of session folder
+  const archiver = await import("archiver");
+  const archive = archiver.default("zip", { zlib: { level: 9 } });
+
+  res.attachment(`${id}.zip`);
+  archive.directory(path.join(sessionFolder, id), false);
+  archive.pipe(res);
+  await archive.finalize();
+});
+
+app.listen(port, () => {
+  console.log(`🚀 Cypher Pairs server running on port ${port}`);
+});    res.status(401).json({ ok: false, message: "Unauthorized. Provide ?token= or X-ADMIN-TOKEN header." });
     return false;
   }
   return true;
