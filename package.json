@@ -3,7 +3,6 @@
   "version": "1.0.0",
   "description": "Cypher Pairs WhatsApp Session Generator",
   "main": "index.js",
-  "type": "module",
   "scripts": {
     "start": "node index.js"
   },
